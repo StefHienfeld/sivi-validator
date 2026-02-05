@@ -1,0 +1,31 @@
+# SIVI AFD XML Validator - Dependencies
+
+# XML parsing
+lxml>=5.0
+
+# LLM integration
+anthropic>=0.40
+
+# Excel output
+openpyxl>=3.1
+
+# CLI
+click>=8.0
+
+# Rich console output
+rich>=13.0
+
+# Web interface
+fastapi>=0.109
+uvicorn>=0.27
+python-multipart>=0.0.6
+python-dotenv>=1.0
+
+# RAG Chatbot dependencies
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+pymupdf>=1.23.0
+pdfplumber>=0.10.0
+pyyaml>=6.0
+tiktoken>=0.5.0
+aiosqlite>=0.19.0

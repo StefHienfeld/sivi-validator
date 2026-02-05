@@ -1,0 +1,23 @@
+# Environment variables (bevat API keys)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Output files
+*.xlsx
+*.json
+!package.json

@@ -1,0 +1,415 @@
+# Expert Knowledge Base voor SIVI AFD Validator
+# Dit bestand bevat impliciete regels en expertise die niet in de officiële documentatie staat.
+
+rules:
+  - id: "EXP-001"
+    title: "Dekkingscodes zijn entiteit-specifiek"
+    description: |
+      Dekkingscodes (bijv. 2002, 3022) zijn alleen geldig voor specifieke entiteiten.
+      De CODE velden (zoals CA_CODE, AH_CODE, PV_CODE) hebben elk hun eigen toegestane waarden.
+
+      Bijvoorbeeld:
+      - Code 2002 (WA-dekking) is alleen geldig voor CA (Clausules) en AH (Aanvullende dekkingen)
+      - PV (Polisvorm/Voertuig) bevat voertuiggegevens, GEEN dekkingscodes
+
+      Als een code in de verkeerde entiteit staat, geeft dit een E1-002 fout.
+    affected_entities: ["CA", "AH", "PV", "DA", "DR"]
+    severity: FOUT
+    related_finding_codes: ["E1-002"]
+    handbook_references:
+      - file: "Handboek-AFD-1.0.pdf"
+        section: "4.2"
+    examples:
+      - incorrect: "PV_CODE = 2002 (WA dekking in voertuig-entiteit)"
+        correct: "CA_CODE = 2002 (WA dekking in clausule-entiteit)"
+        explanation: "PV bevat voertuiggegevens zoals kenteken en merk, niet dekkingen"
+
+  - id: "EXP-002"
+    title: "Branche bepaalt geldige entiteiten"
+    description: |
+      De branchecode (BO_BRANCHE) bepaalt welke entiteiten in een contract mogen voorkomen.
+
+      - Motorrijtuigen (20-25): CA, AH, PV, AN zijn relevant
+      - Rechtsbijstand (60): Alleen DR is relevant, geen CA/AH
+      - Brand (30-35): Geen voertuig-gerelateerde entiteiten
+
+      Een rechtsbijstandverzekering met CA_CODE wijst op een fout.
+    affected_entities: ["CA", "AH", "DR", "PV"]
+    severity: WAARSCHUWING
+    related_finding_codes: ["E3-001"]
+    examples:
+      - incorrect: "Branche 60 (rechtsbijstand) met CA_CODE"
+        correct: "Branche 60 (rechtsbijstand) met DR_CODE"
+        explanation: "Rechtsbijstand gebruikt DR entiteit, niet CA"
+
+  - id: "EXP-003"
+    title: "VP_RECHTSP bepaalt toegestane persoonsgegevens"
+    description: |
+      VP_RECHTSP (rechtspersoon indicator) bepaalt welke velden zinvol zijn:
+
+      - VP_RECHTSP = 'J' (rechtspersoon/bedrijf):
+        * VP_GEBNAAM/VP_GEBNAAM2 zijn NIET van toepassing
+        * Familiesamenstelling velden zijn onlogisch
+
+      - VP_RECHTSP = 'N' (natuurlijk persoon):
+        * VP_KVKNR is NIET van toepassing
+        * VP_GEBNAAM mag gevuld zijn
+
+      Een bedrijf met geboortenaam of familiesamenstelling is verdacht.
+    affected_entities: ["VP"]
+    severity: WAARSCHUWING
+    related_finding_codes: ["E3-002"]
+    examples:
+      - incorrect: "VP_RECHTSP='J' met VP_GEBNAAM='Jansen'"
+        correct: "VP_RECHTSP='J' zonder persoonsgegevens"
+        explanation: "Een rechtspersoon heeft geen geboortenaam"
+
+  - id: "EXP-004"
+    title: "Nulwaarden in verplichte velden"
+    description: |
+      Bepaalde velden mogen nooit nul of leeg zijn:
+
+      - DA_VRZSOMJ (verzekerd bedrag): Moet > 0 zijn
+      - PP_BTP (bruto premie): Moet > 0 zijn voor actieve polissen
+      - BO_BRPRM (branche premie): Moet overeenkomen met PP_BTP
+
+      Een verzekering met €0 premie of €0 verzekerd bedrag is verdacht.
+    affected_entities: ["DA", "PP", "BO"]
+    severity: WAARSCHUWING
+    related_finding_codes: ["E3-003"]
+    examples:
+      - incorrect: "PP_BTP = 0.00 voor actieve polis"
+        correct: "PP_BTP = 125.50"
+        explanation: "Een actieve verzekering heeft altijd premie"
+
+  - id: "EXP-005"
+    title: "VOLGNUM moet sequentieel zijn per entiteit"
+    description: |
+      Het VOLGNUM veld moet sequentieel oplopen (1, 2, 3, ...) per entiteitstype binnen een contract.
+
+      Regels:
+      - Start bij 1 voor elk entiteitstype
+      - Geen gaten in de nummering
+      - Per contract, niet globaal
+
+      Foutieve nummering kan duiden op ontbrekende of dubbele regels.
+    affected_entities: ["CA", "AH", "DA", "DR", "PP", "BO"]
+    severity: FOUT
+    related_finding_codes: ["E2-001"]
+    examples:
+      - incorrect: "CA records met VOLGNUM 1, 3, 4 (gat bij 2)"
+        correct: "CA records met VOLGNUM 1, 2, 3"
+        explanation: "VOLGNUM moet sequentieel zijn zonder gaten"
+
+  - id: "EXP-006"
+    title: "Premie consistentie regels"
+    description: |
+      Premies moeten consistent zijn binnen een contract:
+
+      1. PP_BTP (totaal premie) = som van alle dekkingspremies
+      2. BO_BRPRM (branche premie) = PP_BTP voor die branche
+      3. Tolerantie: maximaal €0.01 verschil (afrondingen)
+
+      Grote verschillen duiden op ontbrekende of verkeerde dekkingen.
+    affected_entities: ["PP", "BO", "CA", "AH"]
+    severity: FOUT
+    related_finding_codes: ["E2-002", "E2-005"]
+    examples:
+      - incorrect: "PP_BTP=100.00 maar som dekkingen=80.00"
+        correct: "PP_BTP=100.00 en som dekkingen=100.00"
+        explanation: "Premies moeten optellen naar het totaal"
+
+  - id: "EXP-007"
+    title: "XD entiteit is verboden"
+    description: |
+      De XD (eXtra Data) entiteit mag NIET voorkomen in standaard ADN batches.
+
+      XD is bedoeld voor maatwerk uitwisseling en wordt niet ondersteund
+      in de standaard verwerking. Aanwezigheid van XD duidt op een
+      configuratiefout of verkeerde template.
+    affected_entities: ["XD"]
+    severity: FOUT
+    related_finding_codes: ["E2-004"]
+    examples:
+      - incorrect: "Contract met XD_CODE velden"
+        correct: "Contract zonder XD entiteit"
+        explanation: "XD is niet toegestaan in standaard ADN"
+
+  - id: "EXP-008"
+    title: "Data kwaliteit indicatoren"
+    description: |
+      Let op signalen van slechte datakwaliteit:
+
+      - Afgekapte teksten (eindigen op onlogische plek)
+      - Placeholder waarden: "XXX", "TEST", "DUMMY", "NVT"
+      - Lege beschrijvingen waar tekst verwacht wordt
+      - Ongebruikelijke karakters in namen
+
+      Dit duidt vaak op test-data of conversiefouten.
+    affected_entities: []
+    severity: INFO
+    related_finding_codes: ["E3-004"]
+    examples:
+      - incorrect: "VP_VNAAM = 'TEST KLANT XXX'"
+        correct: "VP_VNAAM = 'Jan Jansen'"
+        explanation: "Placeholder waarden horen niet in productie"
+
+faq:
+  - question: "Waarom is dekkingscode 2002 niet geldig voor entiteit PV?"
+    answer: |
+      Dekkingscode 2002 is een WA-dekking code die alleen geldig is voor de entiteiten
+      CA (Clausules) of AH (Aanvullende dekkingen Hierarchisch).
+
+      De PV entiteit (Polisvorm/Voertuig) bevat voertuiggegevens zoals kenteken en merk,
+      niet dekkingsinformatie. Als je dekking 2002 wilt gebruiken, plaats deze dan in
+      een CA of AH record met CA_CODE of AH_CODE.
+    related_rules: ["EXP-001"]
+
+  - question: "Wat betekent fout E2-002 (premie mismatch)?"
+    answer: |
+      Fout E2-002 betekent dat de totale premie (PP_BTP) niet overeenkomt met de som
+      van de individuele dekkingspremies.
+
+      Controleer:
+      1. Of alle dekkingen een premie hebben
+      2. Of er geen dekkingen ontbreken
+      3. Of de afrondingen correct zijn (max €0.01 verschil toegestaan)
+
+      Deze fout wijst vaak op ontbrekende CA/AH records of verkeerde premie-toewijzing.
+    related_rules: ["EXP-006"]
+
+  - question: "Waarom krijg ik een waarschuwing over rechtspersoon met geboortenaam?"
+    answer: |
+      Als VP_RECHTSP = 'J' (rechtspersoon/bedrijf), dan zijn persoonsgebonden velden
+      zoals VP_GEBNAAM (geboortenaam) en familiesamenstellingsvelden niet logisch.
+
+      Een bedrijf heeft geen geboortenaam of familiesamenstelling.
+
+      Controleer of VP_RECHTSP correct is ingesteld, of verwijder de persoonsgegevens
+      als het daadwerkelijk om een bedrijf gaat.
+    related_rules: ["EXP-003"]
+
+  - question: "Welke codes zijn geldig voor branche 60 (rechtsbijstand)?"
+    answer: |
+      Voor branche 60 (rechtsbijstand) is alleen de DR (Dekking Rechtsbijstand) entiteit
+      relevant. Gebruik DR_CODE voor dekkingscodes.
+
+      CA (Clausules) en AH (Aanvullende dekkingen) zijn NIET bedoeld voor rechtsbijstand
+      en zullen een waarschuwing genereren.
+
+      Geldige DR_CODE waarden zijn te vinden in dekkingcodesgroup.xsd.
+    related_rules: ["EXP-002"]
+
+  - question: "Wat is het verschil tussen FOUT, WAARSCHUWING en INFO?"
+    answer: |
+      De ernst-niveaus hebben de volgende betekenis:
+
+      - FOUT: Technisch invalide data die verwerking blokkeert.
+        Moet gecorrigeerd worden.
+
+      - WAARSCHUWING: Technisch valide maar semantisch verdacht.
+        Kan op fouten wijzen, moet gecontroleerd worden.
+
+      - INFO: Aandachtspunten en suggesties.
+        Mogelijk verbeterpunten, geen directe actie vereist.
+    related_rules: []
+
+# Branche-dekking mapping - welke entiteiten/dekkingen bij welke branche horen
+branche_dekking_mapping:
+  # Groep 10: Ongevallen en Ziekte
+  "10":
+    naam: "Ongevallen en ziekte"
+    verwachte_entiteiten: ["OD", "OG", "OZ"]
+    mogelijke_entiteiten: ["DA", "AN"]
+    verboden_entiteiten: ["PV", "CA", "AH", "IP", "OP"]
+    opmerkingen: "Algemene ongevallen/ziekte verzekeringen"
+
+  "11":
+    naam: "Ongevallen"
+    verwachte_entiteiten: ["OD", "OG"]
+    mogelijke_entiteiten: ["DA", "AN"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  "12":
+    naam: "Ziektekosten"
+    verwachte_entiteiten: ["OZ"]
+    mogelijke_entiteiten: ["DA"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  "13":
+    naam: "Arbeidsongeschiktheid"
+    verwachte_entiteiten: ["AO"]
+    mogelijke_entiteiten: ["DA", "AN"]
+    verboden_entiteiten: ["PV", "CA"]
+
+  # Groep 20: Motorrijtuigen
+  "20":
+    naam: "Motorrijtuigen"
+    verwachte_entiteiten: ["CA", "AH", "PV"]
+    mogelijke_entiteiten: ["DA", "AN", "WA", "VO", "BH"]
+    verboden_entiteiten: ["IP", "OP", "DR"]
+    opmerkingen: "Omvat alle motorvoertuigen"
+
+  "21":
+    naam: "Personenauto"
+    verwachte_entiteiten: ["CA", "AH", "PV"]
+    mogelijke_entiteiten: ["DA", "AN", "WA", "VO"]
+    verboden_entiteiten: ["IP", "OP"]
+
+  "23":
+    naam: "Bromfiets/scooter"
+    verwachte_entiteiten: ["CA", "AH", "PV"]
+    mogelijke_entiteiten: ["DA", "AN"]
+    verboden_entiteiten: ["IP", "OP"]
+
+  "24":
+    naam: "Rijwiel"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN"]
+    verboden_entiteiten: ["CA", "AH"]
+    opmerkingen: "Geen motorrijtuig, andere structuur"
+
+  "25":
+    naam: "Motor/motorscooter"
+    verwachte_entiteiten: ["CA", "AH", "PV"]
+    mogelijke_entiteiten: ["DA", "AN", "WA", "VO"]
+    verboden_entiteiten: ["IP", "OP"]
+
+  # Groep 30: Brand/Inboedel
+  "30":
+    naam: "Brand"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN", "BR"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+    opmerkingen: "Geen voertuig-gerelateerde entiteiten"
+
+  "31":
+    naam: "Inboedel"
+    verwachte_entiteiten: ["DA", "IP"]
+    mogelijke_entiteiten: ["AN"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  "32":
+    naam: "Opstal"
+    verwachte_entiteiten: ["DA", "OP"]
+    mogelijke_entiteiten: ["AN"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  "33":
+    naam: "Huurdersbelang"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  "34":
+    naam: "Glasverzekering"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  # Groep 37: Pleziervaartuigen
+  "37":
+    naam: "Pleziervaartuigen"
+    verwachte_entiteiten: ["PV"]
+    mogelijke_entiteiten: ["DA", "AN", "CA"]
+    verboden_entiteiten: ["IP", "OP"]
+    opmerkingen: "PV bevat vaartuiggegevens"
+
+  # Groep 40: Transport
+  "40":
+    naam: "Transportverzekering"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN"]
+    verboden_entiteiten: ["PV", "IP", "OP"]
+
+  # Groep 50: Aansprakelijkheid
+  "50":
+    naam: "Aansprakelijkheid"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN", "AV"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  "51":
+    naam: "AVP (particulier)"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  "52":
+    naam: "AVB (bedrijf)"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN", "AV"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  # Groep 60: Rechtsbijstand
+  "60":
+    naam: "Rechtsbijstand"
+    verwachte_entiteiten: ["DR"]
+    mogelijke_entiteiten: ["DA", "AN"]
+    verboden_entiteiten: ["CA", "AH", "PV"]
+    opmerkingen: "Alleen DR-entiteit, geen CA/AH"
+
+  "61":
+    naam: "Rechtsbijstand particulier"
+    verwachte_entiteiten: ["DR"]
+    mogelijke_entiteiten: ["DA", "AN"]
+    verboden_entiteiten: ["CA", "AH", "PV"]
+
+  "62":
+    naam: "Rechtsbijstand verkeer"
+    verwachte_entiteiten: ["DR"]
+    mogelijke_entiteiten: ["DA", "AN"]
+    verboden_entiteiten: ["CA", "AH"]
+
+  # Groep 70: Reis
+  "70":
+    naam: "Reis"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN", "RV"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  "71":
+    naam: "Doorlopende reisverzekering"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN"]
+    verboden_entiteiten: ["PV", "CA", "AH"]
+
+  # Groep 80: Diverse verzekeringen
+  "80":
+    naam: "Diversen"
+    verwachte_entiteiten: ["DA"]
+    mogelijke_entiteiten: ["AN"]
+    verboden_entiteiten: []
+
+# Dekkingscode beschrijvingen
+coverage_code_descriptions:
+  # Motorrijtuigen dekkingscodes
+  "2001": "WA-dekking (Wettelijke aansprakelijkheid)"
+  "2002": "WA-dekking standaard"
+  "2003": "WA beperkt casco"
+  "2004": "WA volledig casco"
+  "3001": "Casco dekking"
+  "3002": "Beperkt casco"
+  "3003": "Volledig casco"
+  "3004": "Mini-casco"
+  "3005": "All-risk casco"
+
+  # Brand/opstal dekkingscodes
+  "4001": "Brand"
+  "4002": "Storm"
+  "4003": "Diefstal"
+  "4004": "Waterschade"
+  "4005": "Lekkage"
+
+  # Rechtsbijstand dekkingscodes
+  "6001": "Rechtsbijstand verkeer"
+  "6002": "Rechtsbijstand wonen"
+  "6003": "Rechtsbijstand consumenten"
+  "6004": "Rechtsbijstand inkomen"
+  "6005": "Rechtsbijstand medisch"
+
+  # Reis dekkingscodes
+  "7001": "Reisongevallen"
+  "7002": "Bagage"
+  "7003": "Annulering"
+  "7004": "Medische kosten buitenland"

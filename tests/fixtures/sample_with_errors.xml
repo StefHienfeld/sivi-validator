@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Batch>
+  <!-- Contract with various errors -->
+  <Contract>
+    <AL>
+      <AL_ENTITEI>AL</AL_ENTITEI>
+      <AL_VRWRKCD>01</AL_VRWRKCD>
+    </AL>
+    <PP>
+      <PP_ENTITEI>PP</PP_ENTITEI>
+      <PP_VRWRKCD>01</PP_VRWRKCD>
+      <PP_VOLGNUM>1</PP_VOLGNUM>
+      <PP_BTP>100.00</PP_BTP>
+      <PP_BRANCHE>037</PP_BRANCHE>
+    </PP>
+    <VP>
+      <VP_ENTITEI>VP</VP_ENTITEI>
+      <VP_VRWRKCD>01</VP_VRWRKCD>
+      <VP_VOLGNUM>1</VP_VOLGNUM>
+      <VP_ANAAM>Dit is een hele lange naam die de maximale lengte van vijfendertig tekens overschrijdt</VP_ANAAM>
+    </VP>
+    <BO>
+      <BO_ENTITEI>BO</BO_ENTITEI>
+      <BO_VRWRKCD>01</BO_VRWRKCD>
+      <BO_VOLGNUM>1</BO_VOLGNUM>
+      <BO_BRPRM>99.00</BO_BRPRM>
+    </BO>
+    <!-- Invalid coverage code -->
+    <AN>
+      <AN_ENTITEI>AN</AN_ENTITEI>
+      <AN_VRWRKCD>01</AN_VRWRKCD>
+      <AN_VOLGNUM>1</AN_VOLGNUM>
+      <AN_CODE>9999</AN_CODE>
+      <AN_BTP>50.00</AN_BTP>
+    </AN>
+    <!-- VOLGNUM not sequential -->
+    <AN>
+      <AN_ENTITEI>AN</AN_ENTITEI>
+      <AN_VRWRKCD>01</AN_VRWRKCD>
+      <AN_VOLGNUM>3</AN_VOLGNUM>
+      <AN_CODE>3004</AN_CODE>
+      <AN_BTP>50.00</AN_BTP>
+    </AN>
+    <!-- XD entity - forbidden -->
+    <XD>
+      <XD_ENTITEI>XD</XD_ENTITEI>
+      <XD_VRWRKCD>01</XD_VRWRKCD>
+      <XD_VOLGNUM>1</XD_VOLGNUM>
+    </XD>
+  </Contract>
+  <!-- Second contract with different prolongation month -->
+  <Contract>
+    <AL>
+      <AL_ENTITEI>AL</AL_ENTITEI>
+      <AL_VRWRKCD>01</AL_VRWRKCD>
+    </AL>
+    <PP>
+      <PP_ENTITEI>PP</PP_ENTITEI>
+      <PP_VRWRKCD>01</PP_VRWRKCD>
+      <PP_VOLGNUM>1</PP_VOLGNUM>
+      <PP_BTP>200.00</PP_BTP>
+      <PP_BRANCHE>021</PP_BRANCHE>
+      <PP_PROLMND>02</PP_PROLMND>
+    </PP>
+    <VP>
+      <VP_ENTITEI>VP</VP_ENTITEI>
+      <VP_VRWRKCD>01</VP_VRWRKCD>
+      <VP_VOLGNUM>1</VP_VOLGNUM>
+      <VP_ANAAM>Pietersen</VP_ANAAM>
+    </VP>
+    <BO>
+      <BO_ENTITEI>BO</BO_ENTITEI>
+      <BO_VRWRKCD>01</BO_VRWRKCD>
+      <BO_VOLGNUM>1</BO_VOLGNUM>
+      <BO_BRPRM>200.00</BO_BRPRM>
+    </BO>
+    <CA>
+      <CA_ENTITEI>CA</CA_ENTITEI>
+      <CA_VRWRKCD>01</CA_VRWRKCD>
+      <CA_VOLGNUM>1</CA_VOLGNUM>
+      <CA_CODE>2003</CA_CODE>
+      <CA_BTP>200.00</CA_BTP>
+    </CA>
+  </Contract>
+</Batch>

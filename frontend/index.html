@@ -157,6 +157,30 @@
 
                 <!-- Findings Section -->
                 <div class="findings-section">
+                    <!-- Category Tabs -->
+                    <div class="category-tabs" id="categoryTabs">
+                        <button class="category-tab active" data-category="all">
+                            <span class="tab-label">Alle</span>
+                            <span class="tab-count" id="categoryAllCount">0</span>
+                        </button>
+                        <button class="category-tab" data-category="inhoudelijk">
+                            <span class="tab-label">Inhoudelijk</span>
+                            <span class="tab-count" id="categoryInhoudelijkCount">0</span>
+                        </button>
+                        <button class="category-tab" data-category="ontbrekend">
+                            <span class="tab-label">Ontbrekend</span>
+                            <span class="tab-count" id="categoryOntbrekendCount">0</span>
+                        </button>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="review-progress" id="reviewProgress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                        </div>
+                        <span class="progress-text" id="progressText">0 van 0 afgehandeld (0%)</span>
+                    </div>
+
                     <div class="findings-toolbar">
                         <h2 class="findings-title">Bevindingen</h2>
                         <div class="toolbar-actions">
@@ -197,7 +221,11 @@
                         </div>
                     </div>
 
-                    <div class="findings-table-wrapper">
+                    <!-- Grouped Findings View -->
+                    <div class="findings-grouped" id="findingsGrouped"></div>
+
+                    <!-- Classic Table View (hidden by default) -->
+                    <div class="findings-table-wrapper" id="findingsTableWrapper" hidden>
                         <table class="findings-table" id="findingsTable">
                             <thead>
                                 <tr>

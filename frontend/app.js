@@ -15,6 +15,11 @@ let chatFindingContext = null;
 let findingStatuses = {};
 let fileValidationId = null;
 
+// Grouped view state
+let currentCategory = 'all';
+let groupedFindings = {};
+let expandedGroups = new Set();
+
 // Status constants
 const STATUS_OPEN = 'OPEN';
 const STATUS_GEACCEPTEERD = 'GEACCEPTEERD';
@@ -65,6 +70,8 @@ const engineFilter = document.getElementById('engineFilter');
 const searchFilter = document.getElementById('searchFilter');
 const findingsBody = document.getElementById('findingsBody');
 const noFindings = document.getElementById('noFindings');
+const findingsGrouped = document.getElementById('findingsGrouped');
+const findingsTableWrapper = document.getElementById('findingsTableWrapper');
 
 // Modal elements
 const bulkActionModal = document.getElementById('bulkActionModal');
@@ -90,6 +97,7 @@ async function init() {
     setupEngineOptions();
     setupOptionsAccordion();
     setupFilters();
+    setupCategoryTabs();
     setupExports();
     setupValidation();
     setupChat();
@@ -403,10 +411,32 @@ function displayResults() {
     const engineNames = { 1: 'Schema', 2: 'Rules', 3: 'AI' };
     enginesInfo.textContent = enginesUsed.map(e => engineNames[e]).join(', ');
 
-    renderFindings();
+    // Reset category to all
+    currentCategory = 'all';
+    expandedGroups.clear();
+
+    // Update category tab visuals
+    document.querySelectorAll('.category-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.category === 'all');
+    });
+
+    // Update category counts
+    updateCategoryCounts();
+
+    // Update progress bar
+    updateProgressBar();
+
+    // Render grouped view
+    renderFindingGroups();
 }
 
 function renderFindings() {
+    // Use the grouped view by default
+    renderFindingGroups();
+}
+
+// Legacy table view (kept for reference/future use)
+function renderFindingsTable() {
     const filtered = filterFindings();
 
     findingsBody.innerHTML = '';
@@ -652,6 +682,8 @@ function hideResults() {
     allFindings = [];
     findingStatuses = {};
     fileValidationId = null;
+    expandedGroups.clear();
+    currentCategory = 'all';
 
     chatConversationId = null;
     chatFindingContext = null;
@@ -711,6 +743,458 @@ function debounce(func, wait) {
 function escapeAttr(text) {
     if (!text) return '';
     return text.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+}
+
+// ========================================
+// CATEGORIZATION & GROUPING FUNCTIONS
+// ========================================
+
+/**
+ * Categorize a finding as 'ontbrekend' (missing) or 'inhoudelijk' (content error)
+ */
+function categorizeFinding(finding) {
+    const waarde = String(finding.waarde || '').trim().toLowerCase();
+    const omschrijving = String(finding.omschrijving || '').toLowerCase();
+
+    // Check for missing/empty values
+    if (waarde === '' || waarde === '0' || waarde === '0.00' || waarde === '0,00' || waarde === 'null' || waarde === 'undefined') {
+        return 'ontbrekend';
+    }
+
+    // Check description for "ontbreekt" indicators
+    if (omschrijving.includes('ontbreekt') || omschrijving.includes('ontbrekend') ||
+        omschrijving.includes('leeg') || omschrijving.includes('niet ingevuld') ||
+        omschrijving.includes('verplicht') || omschrijving.includes('missing')) {
+        return 'ontbrekend';
+    }
+
+    return 'inhoudelijk';
+}
+
+/**
+ * Generate a grouping key for identical findings
+ */
+function getGroupKey(finding) {
+    // Group by: code + label (without prefix) + description
+    const labelSuffix = finding.label ? finding.label.split('_').slice(1).join('_') : '';
+    return `${finding.code || ''}|${labelSuffix}|${finding.omschrijving || ''}`;
+}
+
+/**
+ * Group findings by their grouping key
+ */
+function groupFindings(findings) {
+    const groups = {};
+
+    findings.forEach((finding, index) => {
+        const groupKey = getGroupKey(finding);
+        const category = categorizeFinding(finding);
+        const findingId = generateFindingId(finding, allFindings.indexOf(finding));
+
+        if (!groups[groupKey]) {
+            groups[groupKey] = {
+                key: groupKey,
+                code: finding.code,
+                label: finding.label,
+                omschrijving: finding.omschrijving,
+                severity: finding.severity,
+                criticality: finding.criticality || 'AANDACHT',
+                category: category,
+                entiteit: finding.entiteit,
+                engine: finding.engine,
+                findings: []
+            };
+        }
+
+        groups[groupKey].findings.push({
+            ...finding,
+            findingId: findingId,
+            originalIndex: allFindings.indexOf(finding)
+        });
+    });
+
+    return groups;
+}
+
+/**
+ * Format a value based on its label/field type
+ */
+function formatValue(value, label) {
+    if (!value || value === '' || value === '0' || value === '0.00') {
+        return { formatted: value || '-', type: 'empty' };
+    }
+
+    const labelUpper = (label || '').toUpperCase();
+    const valueStr = String(value);
+
+    // Currency formatting (fields ending with _BTP, _VERZSOM, _PRE, _BEDRAG, etc.)
+    if (labelUpper.includes('_BTP') || labelUpper.includes('_VERZSOM') ||
+        labelUpper.includes('_PRE') || labelUpper.includes('_BEDRAG') ||
+        labelUpper.includes('_SOM') || labelUpper.includes('_POLIS')) {
+        const num = parseFloat(valueStr.replace(',', '.'));
+        if (!isNaN(num)) {
+            const formatted = new Intl.NumberFormat('nl-NL', {
+                style: 'currency',
+                currency: 'EUR'
+            }).format(num);
+            return { formatted, type: 'currency' };
+        }
+    }
+
+    // Date formatting (fields ending with _DAT, _DATUM, _GEBDAT, _INGDAT, etc.)
+    if (labelUpper.includes('_DAT') || labelUpper.includes('_DATUM') ||
+        labelUpper.includes('_GEBDAT') || labelUpper.includes('_INGDAT')) {
+        // Try to parse YYYYMMDD format
+        if (/^\d{8}$/.test(valueStr)) {
+            const year = valueStr.substring(0, 4);
+            const month = valueStr.substring(4, 6);
+            const day = valueStr.substring(6, 8);
+            return { formatted: `${day}-${month}-${year}`, type: 'date' };
+        }
+        // Try ISO format
+        if (/^\d{4}-\d{2}-\d{2}/.test(valueStr)) {
+            const parts = valueStr.substring(0, 10).split('-');
+            return { formatted: `${parts[2]}-${parts[1]}-${parts[0]}`, type: 'date' };
+        }
+    }
+
+    // Percentage formatting (fields ending with _PERC, _PCT)
+    if (labelUpper.includes('_PERC') || labelUpper.includes('_PCT')) {
+        const num = parseFloat(valueStr.replace(',', '.'));
+        if (!isNaN(num)) {
+            return { formatted: `${num}%`, type: 'percentage' };
+        }
+    }
+
+    return { formatted: valueStr, type: 'text' };
+}
+
+/**
+ * Setup category tabs
+ */
+function setupCategoryTabs() {
+    const tabs = document.querySelectorAll('.category-tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            currentCategory = tab.dataset.category;
+            renderFindingGroups();
+        });
+    });
+}
+
+/**
+ * Update category counts
+ */
+function updateCategoryCounts() {
+    let allCount = 0;
+    let inhoudelijkCount = 0;
+    let ontbrekendCount = 0;
+
+    allFindings.forEach(finding => {
+        const category = categorizeFinding(finding);
+        allCount++;
+        if (category === 'inhoudelijk') {
+            inhoudelijkCount++;
+        } else {
+            ontbrekendCount++;
+        }
+    });
+
+    const allCountEl = document.getElementById('categoryAllCount');
+    const inhoudelijkCountEl = document.getElementById('categoryInhoudelijkCount');
+    const ontbrekendCountEl = document.getElementById('categoryOntbrekendCount');
+
+    if (allCountEl) allCountEl.textContent = allCount;
+    if (inhoudelijkCountEl) inhoudelijkCountEl.textContent = inhoudelijkCount;
+    if (ontbrekendCountEl) ontbrekendCountEl.textContent = ontbrekendCount;
+}
+
+/**
+ * Update progress bar
+ */
+function updateProgressBar() {
+    const total = allFindings.length;
+    let handled = 0;
+
+    allFindings.forEach((finding, index) => {
+        const findingId = generateFindingId(finding, index);
+        const status = findingStatuses[findingId] || STATUS_OPEN;
+        if (status !== STATUS_OPEN) {
+            handled++;
+        }
+    });
+
+    const percentage = total > 0 ? Math.round((handled / total) * 100) : 0;
+
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+
+    if (progressFill) {
+        progressFill.style.width = `${percentage}%`;
+    }
+    if (progressText) {
+        progressText.textContent = `${handled} van ${total} afgehandeld (${percentage}%)`;
+    }
+}
+
+/**
+ * Render grouped findings view
+ */
+function renderFindingGroups() {
+    if (!findingsGrouped) return;
+
+    // First filter findings based on current filters
+    const filtered = filterFindings();
+
+    // Then filter by category
+    const categoryFiltered = filtered.filter(finding => {
+        if (currentCategory === 'all') return true;
+        return categorizeFinding(finding) === currentCategory;
+    });
+
+    // Group the filtered findings
+    const groups = groupFindings(categoryFiltered);
+
+    // Sort groups by count (descending)
+    const sortedGroups = Object.values(groups).sort((a, b) => b.findings.length - a.findings.length);
+
+    if (sortedGroups.length === 0) {
+        findingsGrouped.innerHTML = '';
+        noFindings.hidden = false;
+        return;
+    }
+
+    noFindings.hidden = true;
+
+    let html = '';
+
+    sortedGroups.forEach(group => {
+        const isExpanded = expandedGroups.has(group.key);
+        const expandedClass = isExpanded ? 'expanded' : '';
+
+        // Determine the dominant status for the group
+        const groupStatus = getGroupDominantStatus(group);
+
+        html += `
+            <div class="finding-group ${expandedClass}" data-group-key="${escapeAttr(group.key)}" data-category="${group.category}">
+                <div class="group-header" data-group-key="${escapeAttr(group.key)}">
+                    <button class="group-expand" title="Uitklappen">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 18l6-6-6-6"/>
+                        </svg>
+                    </button>
+                    <span class="group-count">${group.findings.length}x</span>
+                    <span class="group-code">${escapeHtml(group.code)}</span>
+                    <span class="group-label" title="${escapeAttr(group.label)}">${escapeHtml(group.label || '')}</span>
+                    <span class="group-description" title="${escapeAttr(group.omschrijving)}">${escapeHtml(truncate(group.omschrijving, 50))}</span>
+                    <select class="group-status-select status-${groupStatus.toLowerCase()}" data-group-key="${escapeAttr(group.key)}">
+                        <option value="${STATUS_OPEN}" ${groupStatus === STATUS_OPEN ? 'selected' : ''}>Open</option>
+                        <option value="${STATUS_GEACCEPTEERD}" ${groupStatus === STATUS_GEACCEPTEERD ? 'selected' : ''}>Geaccepteerd</option>
+                        <option value="${STATUS_GENEGEERD}" ${groupStatus === STATUS_GENEGEERD ? 'selected' : ''}>Genegeerd</option>
+                        <option value="${STATUS_OPGELOST}" ${groupStatus === STATUS_OPGELOST ? 'selected' : ''}>Opgelost</option>
+                    </select>
+                    <button class="group-ask-btn" title="Vraag hierover" data-finding='${escapeAttr(JSON.stringify(group.findings[0]))}'>?</button>
+                </div>
+                <div class="group-details">
+                    <table class="group-details-table">
+                        <thead>
+                            <tr>
+                                <th>Contract</th>
+                                <th>Entiteit</th>
+                                <th>Waarde</th>
+                                <th>Verwacht</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${group.findings.map(f => {
+                                const formattedWaarde = formatValue(f.waarde, f.label);
+                                const formattedVerwacht = formatValue(f.verwacht, f.label);
+                                const status = findingStatuses[f.findingId] || STATUS_OPEN;
+                                return `
+                                    <tr data-finding-id="${escapeAttr(f.findingId)}">
+                                        <td class="detail-contract">${escapeHtml(f.contract)}</td>
+                                        <td>${escapeHtml(f.entiteit)}</td>
+                                        <td class="detail-value formatted-${formattedWaarde.type}">${escapeHtml(formattedWaarde.formatted)}</td>
+                                        <td class="detail-value formatted-${formattedVerwacht.type}">${escapeHtml(formattedVerwacht.formatted || '-')}</td>
+                                        <td>
+                                            <select class="detail-status-select status-${status.toLowerCase()}" data-finding-id="${escapeAttr(f.findingId)}">
+                                                <option value="${STATUS_OPEN}" ${status === STATUS_OPEN ? 'selected' : ''}>Open</option>
+                                                <option value="${STATUS_GEACCEPTEERD}" ${status === STATUS_GEACCEPTEERD ? 'selected' : ''}>Geaccepteerd</option>
+                                                <option value="${STATUS_GENEGEERD}" ${status === STATUS_GENEGEERD ? 'selected' : ''}>Genegeerd</option>
+                                                <option value="${STATUS_OPGELOST}" ${status === STATUS_OPGELOST ? 'selected' : ''}>Opgelost</option>
+                                            </select>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    });
+
+    findingsGrouped.innerHTML = html;
+
+    // Attach event listeners
+    attachGroupEventListeners();
+
+    // Update progress bar
+    updateProgressBar();
+    updateCategoryCounts();
+    updateOpenCount();
+}
+
+/**
+ * Get the dominant status for a group (most common status)
+ */
+function getGroupDominantStatus(group) {
+    const statusCounts = {};
+
+    group.findings.forEach(f => {
+        const status = findingStatuses[f.findingId] || STATUS_OPEN;
+        statusCounts[status] = (statusCounts[status] || 0) + 1;
+    });
+
+    // If all have same status, return that
+    const statuses = Object.keys(statusCounts);
+    if (statuses.length === 1) {
+        return statuses[0];
+    }
+
+    // If any are open, show as open
+    if (statusCounts[STATUS_OPEN] > 0) {
+        return STATUS_OPEN;
+    }
+
+    // Otherwise return most common
+    return Object.entries(statusCounts).sort((a, b) => b[1] - a[1])[0][0];
+}
+
+/**
+ * Attach event listeners to grouped view
+ */
+function attachGroupEventListeners() {
+    // Group header click to expand/collapse
+    document.querySelectorAll('.group-header').forEach(header => {
+        header.addEventListener('click', (e) => {
+            // Don't toggle if clicking on select or button
+            if (e.target.closest('select') || e.target.closest('button')) return;
+
+            const groupKey = header.dataset.groupKey;
+            const groupEl = header.closest('.finding-group');
+
+            if (expandedGroups.has(groupKey)) {
+                expandedGroups.delete(groupKey);
+                groupEl.classList.remove('expanded');
+            } else {
+                expandedGroups.add(groupKey);
+                groupEl.classList.add('expanded');
+            }
+        });
+    });
+
+    // Expand button click
+    document.querySelectorAll('.group-expand').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const header = btn.closest('.group-header');
+            header.click();
+        });
+    });
+
+    // Group status change (bulk)
+    document.querySelectorAll('.group-status-select').forEach(select => {
+        select.addEventListener('click', (e) => e.stopPropagation());
+        select.addEventListener('change', (e) => {
+            const groupKey = e.target.dataset.groupKey;
+            const newStatus = e.target.value;
+            applyGroupStatusChange(groupKey, newStatus);
+        });
+    });
+
+    // Individual status change
+    document.querySelectorAll('.detail-status-select').forEach(select => {
+        select.addEventListener('change', (e) => {
+            const findingId = e.target.dataset.findingId;
+            const newStatus = e.target.value;
+            applyStatusChange(findingId, newStatus);
+
+            // Update group status select
+            const groupEl = e.target.closest('.finding-group');
+            if (groupEl) {
+                const groupKey = groupEl.dataset.groupKey;
+                updateGroupStatusSelect(groupKey);
+            }
+        });
+    });
+
+    // Group ask button
+    document.querySelectorAll('.group-ask-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const findingData = JSON.parse(e.target.dataset.finding);
+            askAboutFinding(findingData);
+        });
+    });
+}
+
+/**
+ * Apply status change to all findings in a group
+ */
+function applyGroupStatusChange(groupKey, newStatus) {
+    const filtered = filterFindings();
+    const categoryFiltered = filtered.filter(finding => {
+        if (currentCategory === 'all') return true;
+        return categorizeFinding(finding) === currentCategory;
+    });
+
+    const groups = groupFindings(categoryFiltered);
+    const group = groups[groupKey];
+
+    if (!group) return;
+
+    group.findings.forEach(f => {
+        findingStatuses[f.findingId] = newStatus;
+    });
+
+    saveStatusesToStorage();
+
+    // Update the UI
+    renderFindingGroups();
+}
+
+/**
+ * Update group status select after individual change
+ */
+function updateGroupStatusSelect(groupKey) {
+    const groupEl = document.querySelector(`.finding-group[data-group-key="${groupKey}"]`);
+    if (!groupEl) return;
+
+    const filtered = filterFindings();
+    const categoryFiltered = filtered.filter(finding => {
+        if (currentCategory === 'all') return true;
+        return categorizeFinding(finding) === currentCategory;
+    });
+
+    const groups = groupFindings(categoryFiltered);
+    const group = groups[groupKey];
+
+    if (!group) return;
+
+    const dominantStatus = getGroupDominantStatus(group);
+    const select = groupEl.querySelector('.group-status-select');
+
+    if (select) {
+        select.value = dominantStatus;
+        select.className = `group-status-select status-${dominantStatus.toLowerCase()}`;
+    }
+
+    updateProgressBar();
+    updateOpenCount();
 }
 
 // Status Management Functions
@@ -818,6 +1302,7 @@ function applyStatusChange(findingId, newStatus) {
     findingStatuses[findingId] = newStatus;
     saveStatusesToStorage();
 
+    // Update table view row if it exists
     const row = document.querySelector(`tr[data-finding-id="${findingId}"]`);
     if (row) {
         row.classList.remove('status-open', 'status-geaccepteerd', 'status-genegeerd', 'status-opgelost');
@@ -827,9 +1312,16 @@ function applyStatusChange(findingId, newStatus) {
         if (select) {
             select.className = `status-select status-${newStatus.toLowerCase()}`;
         }
+
+        // Update detail status select in grouped view
+        const detailSelect = row.querySelector('.detail-status-select');
+        if (detailSelect) {
+            detailSelect.className = `detail-status-select status-${newStatus.toLowerCase()}`;
+        }
     }
 
     updateOpenCount();
+    updateProgressBar();
 }
 
 function applyBulkStatusChange(findingIds, newStatus) {

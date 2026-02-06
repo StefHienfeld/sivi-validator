@@ -15,10 +15,14 @@ let chatFindingContext = null;
 let findingStatuses = {};
 let fileValidationId = null;
 
+// Session & XML viewer state
+let originalXmlContent = null;  // Stores the original XML content for viewing
+
 // Grouped view state
 let currentCategory = 'all';
 let groupedFindings = {};
 let expandedGroups = new Set();
+let collapsedThemas = new Set();
 
 // Status constants
 const STATUS_OPEN = 'OPEN';
@@ -83,6 +87,9 @@ const bulkActionAll = document.getElementById('bulkActionAll');
 // Export buttons
 const downloadJsonBtn = document.getElementById('downloadJson');
 const downloadExcelBtn = document.getElementById('downloadExcel');
+const downloadSessionBtn = document.getElementById('downloadSession');
+const loadSessionBtn = document.getElementById('loadSessionBtn');
+const sessionFileInput = document.getElementById('sessionFileInput');
 
 // Toast
 const errorToast = document.getElementById('errorToast');
@@ -103,6 +110,8 @@ async function init() {
     setupChat();
     setupBulkActionModal();
     setupNavigation();
+    setupSessionHandling();
+    setupXmlViewer();
 }
 
 // Options Accordion Toggle
@@ -343,6 +352,9 @@ async function runValidation() {
     hideError();
 
     try {
+        // Read and store the original XML content for the XML viewer
+        originalXmlContent = await readFileAsText(selectedFile);
+
         const formData = new FormData();
         formData.append('file', selectedFile);
 
@@ -372,6 +384,18 @@ async function runValidation() {
     } finally {
         setLoading(false);
     }
+}
+
+/**
+ * Read a file as text
+ */
+function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = (e) => reject(new Error('Could not read file'));
+        reader.readAsText(file);
+    });
 }
 
 function setLoading(loading) {
@@ -410,6 +434,12 @@ function displayResults() {
     const enginesUsed = metadata.engines_requested || [];
     const engineNames = { 1: 'Schema', 2: 'Rules', 3: 'AI' };
     enginesInfo.textContent = enginesUsed.map(e => engineNames[e]).join(', ');
+
+    // Show/hide XML available badge
+    const xmlBadge = document.getElementById('xmlAvailableBadge');
+    if (xmlBadge) {
+        xmlBadge.hidden = !originalXmlContent;
+    }
 
     // Reset category to all
     currentCategory = 'all';
@@ -682,7 +712,9 @@ function hideResults() {
     allFindings = [];
     findingStatuses = {};
     fileValidationId = null;
+    originalXmlContent = null;
     expandedGroups.clear();
+    collapsedThemas.clear();
     currentCategory = 'all';
 
     chatConversationId = null;
@@ -781,6 +813,100 @@ function getGroupKey(finding) {
 }
 
 /**
+ * Determine the thema (category theme) for a finding based on error code
+ * Used for grouping related findings together visually
+ */
+function getThema(finding) {
+    const code = finding.code || '';
+
+    // Thema mapping based on error codes
+    const themaMapping = {
+        // Structuur - hiërarchie en volgorde fouten
+        'E1-006': 'structuur',  // Hiërarchie fout
+        'E1-008': 'structuur',  // Element volgorde incorrect
+        'E2-004': 'structuur',  // XD-entiteit aanwezig
+
+        // Labels & Attributen
+        'E1-001': 'labels',     // Label niet in entiteit
+        'E1-005': 'labels',     // Label van andere entiteit
+        'E1-007': 'labels',     // Verplicht attribuut ontbreekt
+
+        // Codes & Waarden
+        'E1-002': 'codes',      // Ongeldige dekkingscode
+        'E1-009': 'codes',      // Ongeldige codelijst waarde
+
+        // Format & Lengte
+        'E1-003': 'format',     // Veldlengte overschreden
+        'E1-004': 'format',     // Formaatfout
+        'E1-010': 'format',     // Decimale precisie fout
+        'E2-007': 'format',     // Postcode formaat ongeldig
+
+        // Premierekening
+        'E2-002': 'premie',     // PP_BTP ≠ som dekkings-BTPs
+        'E2-005': 'premie',     // BO_BRPRM ≠ PP_BTP
+        'E2-010': 'premie',     // PP_TTOT ≠ som componenten
+
+        // Datums
+        'E2-006': 'datums',     // Datum logica fout
+        'E2-014': 'datums',     // Ingangsdatum in verleden
+
+        // Branche & Dekking
+        'E2-013': 'branche',    // Branche-dekking mismatch
+        'E2-016': 'branche',    // Ongeldige dekkingscombinatie
+        'E2-017': 'branche',    // Objecttype niet passend bij branche
+
+        // Validatie (BSN, IBAN, etc.)
+        'E2-008': 'validatie',  // BSN/KVK 11-proef fout
+        'E2-011': 'validatie',  // Ongeldig IBAN formaat
+
+        // Overig
+        'E2-001': 'overig',     // VOLGNUM niet sequentieel
+        'E2-003': 'overig',     // Meerdere prolongatiemaanden
+        'E2-009': 'overig',     // Duplicaat entiteit
+        'E2-012': 'overig',     // Betaaltermijn inconsistent
+        'E2-015': 'overig',     // Verzekerde som overschrijdt maximum
+    };
+
+    return themaMapping[code] || 'overig';
+}
+
+/**
+ * Get display name for a thema
+ */
+function getThemaDisplayName(thema) {
+    const displayNames = {
+        'structuur': 'Structuur',
+        'labels': 'Labels & Attributen',
+        'codes': 'Codes & Waarden',
+        'format': 'Format & Lengte',
+        'premie': 'Premierekening',
+        'datums': 'Datums',
+        'branche': 'Branche & Dekking',
+        'validatie': 'Validatie',
+        'overig': 'Overig'
+    };
+    return displayNames[thema] || 'Overig';
+}
+
+/**
+ * Get sort order for themas (lower = higher priority)
+ */
+function getThemaSortOrder(thema) {
+    const sortOrder = {
+        'structuur': 1,
+        'labels': 2,
+        'codes': 3,
+        'format': 4,
+        'premie': 5,
+        'datums': 6,
+        'branche': 7,
+        'validatie': 8,
+        'overig': 9
+    };
+    return sortOrder[thema] || 99;
+}
+
+/**
  * Group findings by their grouping key
  */
 function groupFindings(findings) {
@@ -790,6 +916,7 @@ function groupFindings(findings) {
         const groupKey = getGroupKey(finding);
         const category = categorizeFinding(finding);
         const findingId = generateFindingId(finding, allFindings.indexOf(finding));
+        const thema = getThema(finding);
 
         if (!groups[groupKey]) {
             groups[groupKey] = {
@@ -802,6 +929,7 @@ function groupFindings(findings) {
                 category: category,
                 entiteit: finding.entiteit,
                 engine: finding.engine,
+                thema: thema,
                 findings: []
             };
         }
@@ -912,6 +1040,32 @@ function updateCategoryCounts() {
 }
 
 /**
+ * Update summary cards based on status - only counts OPEN findings
+ */
+function updateSummaryCardsFromStatus() {
+    let kritiek = 0, aandacht = 0, info = 0, total = 0;
+
+    allFindings.forEach((finding, index) => {
+        const findingId = generateFindingId(finding, index);
+        const status = findingStatuses[findingId] || STATUS_OPEN;
+
+        // Only count OPEN findings
+        if (status === STATUS_OPEN) {
+            total++;
+            const criticality = finding.criticality || 'AANDACHT';
+            if (criticality === 'KRITIEK') kritiek++;
+            else if (criticality === 'AANDACHT') aandacht++;
+            else info++;
+        }
+    });
+
+    document.getElementById('kritiekCount').textContent = kritiek;
+    document.getElementById('aandachtCount').textContent = aandacht;
+    document.getElementById('infoCount').textContent = info;
+    document.getElementById('totalCount').textContent = total;
+}
+
+/**
  * Update progress bar
  */
 function updateProgressBar() {
@@ -957,8 +1111,15 @@ function renderFindingGroups() {
     // Group the filtered findings
     const groups = groupFindings(categoryFiltered);
 
-    // Sort groups by count (descending)
-    const sortedGroups = Object.values(groups).sort((a, b) => b.findings.length - a.findings.length);
+    // Sort groups by thema first, then by count (descending) within each thema
+    const sortedGroups = Object.values(groups).sort((a, b) => {
+        const themaOrderA = getThemaSortOrder(a.thema);
+        const themaOrderB = getThemaSortOrder(b.thema);
+        if (themaOrderA !== themaOrderB) {
+            return themaOrderA - themaOrderB;
+        }
+        return b.findings.length - a.findings.length;
+    });
 
     if (sortedGroups.length === 0) {
         findingsGrouped.innerHTML = '';
@@ -969,16 +1130,63 @@ function renderFindingGroups() {
     noFindings.hidden = true;
 
     let html = '';
+    let currentThema = null;
+    let themaIndex = 0;
+
+    // Pre-calculate thema counts and statuses
+    const themaStats = {};
+    sortedGroups.forEach(group => {
+        if (!themaStats[group.thema]) {
+            themaStats[group.thema] = { count: 0, statuses: {} };
+        }
+        group.findings.forEach(f => {
+            themaStats[group.thema].count++;
+            const status = findingStatuses[f.findingId] || STATUS_OPEN;
+            themaStats[group.thema].statuses[status] = (themaStats[group.thema].statuses[status] || 0) + 1;
+        });
+    });
 
     sortedGroups.forEach(group => {
+        // Add thema header when thema changes
+        if (group.thema !== currentThema) {
+            currentThema = group.thema;
+            themaIndex++;
+            const themaDisplayName = getThemaDisplayName(currentThema);
+            const themaClass = themaIndex % 2 === 0 ? 'thema-even' : 'thema-odd';
+            const isCollapsed = collapsedThemas.has(currentThema);
+            const collapsedClass = isCollapsed ? 'collapsed' : '';
+            const themaCount = themaStats[currentThema]?.count || 0;
+            const themaDominantStatus = getThemaDominantStatus(themaStats[currentThema]?.statuses || {});
+            html += `
+                <div class="thema-header ${themaClass} ${collapsedClass}" data-thema="${currentThema}">
+                    <button class="thema-expand" title="${isCollapsed ? 'Uitklappen' : 'Inklappen'}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 18l6-6-6-6"/>
+                        </svg>
+                    </button>
+                    <span class="thema-indicator"></span>
+                    <span class="thema-name">${escapeHtml(themaDisplayName)}</span>
+                    <span class="thema-count">${themaCount}x</span>
+                    <select class="thema-status-select status-${themaDominantStatus.toLowerCase()}" data-thema="${currentThema}">
+                        <option value="${STATUS_OPEN}" ${themaDominantStatus === STATUS_OPEN ? 'selected' : ''}>Open</option>
+                        <option value="${STATUS_GEACCEPTEERD}" ${themaDominantStatus === STATUS_GEACCEPTEERD ? 'selected' : ''}>Geaccepteerd</option>
+                        <option value="${STATUS_GENEGEERD}" ${themaDominantStatus === STATUS_GENEGEERD ? 'selected' : ''}>Genegeerd</option>
+                        <option value="${STATUS_OPGELOST}" ${themaDominantStatus === STATUS_OPGELOST ? 'selected' : ''}>Opgelost</option>
+                    </select>
+                </div>
+            `;
+        }
         const isExpanded = expandedGroups.has(group.key);
         const expandedClass = isExpanded ? 'expanded' : '';
+        const groupThemaClass = themaIndex % 2 === 0 ? 'thema-even' : 'thema-odd';
+        const isThemaCollapsed = collapsedThemas.has(group.thema);
+        const themaCollapsedClass = isThemaCollapsed ? 'thema-collapsed' : '';
 
         // Determine the dominant status for the group
         const groupStatus = getGroupDominantStatus(group);
 
         html += `
-            <div class="finding-group ${expandedClass}" data-group-key="${escapeAttr(group.key)}" data-category="${group.category}">
+            <div class="finding-group ${expandedClass} ${groupThemaClass} ${themaCollapsedClass}" data-group-key="${escapeAttr(group.key)}" data-category="${group.category}" data-thema="${group.thema}">
                 <div class="group-header" data-group-key="${escapeAttr(group.key)}">
                     <button class="group-expand" title="Uitklappen">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1006,6 +1214,7 @@ function renderFindingGroups() {
                                 <th>Waarde</th>
                                 <th>Verwacht</th>
                                 <th>Status</th>
+                                <th class="col-xml">XML</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1013,6 +1222,7 @@ function renderFindingGroups() {
                                 const formattedWaarde = formatValue(f.waarde, f.label);
                                 const formattedVerwacht = formatValue(f.verwacht, f.label);
                                 const status = findingStatuses[f.findingId] || STATUS_OPEN;
+                                const lineNumber = f.regel || null;
                                 return `
                                     <tr data-finding-id="${escapeAttr(f.findingId)}">
                                         <td class="detail-contract">${escapeHtml(f.contract)}</td>
@@ -1026,6 +1236,13 @@ function renderFindingGroups() {
                                                 <option value="${STATUS_GENEGEERD}" ${status === STATUS_GENEGEERD ? 'selected' : ''}>Genegeerd</option>
                                                 <option value="${STATUS_OPGELOST}" ${status === STATUS_OPGELOST ? 'selected' : ''}>Opgelost</option>
                                             </select>
+                                        </td>
+                                        <td class="col-xml">
+                                            ${lineNumber ? `<button class="xml-view-btn" data-line="${lineNumber}" title="Bekijk in XML (regel ${lineNumber})">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M16 18L22 12L16 6M8 6L2 12L8 18"/>
+                                                </svg>
+                                            </button>` : '<span class="no-line">-</span>'}
                                         </td>
                                     </tr>
                                 `;
@@ -1046,6 +1263,23 @@ function renderFindingGroups() {
     updateProgressBar();
     updateCategoryCounts();
     updateOpenCount();
+}
+
+/**
+ * Get the dominant status for a thema based on status counts
+ */
+function getThemaDominantStatus(statusCounts) {
+    const statuses = Object.keys(statusCounts);
+    if (statuses.length === 0) return STATUS_OPEN;
+    if (statuses.length === 1) return statuses[0];
+
+    // If any are open, show as open
+    if (statusCounts[STATUS_OPEN] > 0) {
+        return STATUS_OPEN;
+    }
+
+    // Otherwise return most common
+    return Object.entries(statusCounts).sort((a, b) => b[1] - a[1])[0][0];
 }
 
 /**
@@ -1078,6 +1312,51 @@ function getGroupDominantStatus(group) {
  * Attach event listeners to grouped view
  */
 function attachGroupEventListeners() {
+    // Thema header click to expand/collapse
+    document.querySelectorAll('.thema-header').forEach(header => {
+        header.addEventListener('click', (e) => {
+            // Don't toggle if clicking on select
+            if (e.target.closest('select')) return;
+
+            const thema = header.dataset.thema;
+
+            if (collapsedThemas.has(thema)) {
+                collapsedThemas.delete(thema);
+                header.classList.remove('collapsed');
+                // Show all finding groups for this thema
+                document.querySelectorAll(`.finding-group[data-thema="${thema}"]`).forEach(group => {
+                    group.classList.remove('thema-collapsed');
+                });
+            } else {
+                collapsedThemas.add(thema);
+                header.classList.add('collapsed');
+                // Hide all finding groups for this thema
+                document.querySelectorAll(`.finding-group[data-thema="${thema}"]`).forEach(group => {
+                    group.classList.add('thema-collapsed');
+                });
+            }
+        });
+    });
+
+    // Thema expand button click
+    document.querySelectorAll('.thema-expand').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const header = btn.closest('.thema-header');
+            header.click();
+        });
+    });
+
+    // Thema status change (bulk for entire thema)
+    document.querySelectorAll('.thema-status-select').forEach(select => {
+        select.addEventListener('click', (e) => e.stopPropagation());
+        select.addEventListener('change', (e) => {
+            const thema = e.target.dataset.thema;
+            const newStatus = e.target.value;
+            applyThemaStatusChange(thema, newStatus);
+        });
+    });
+
     // Group header click to expand/collapse
     document.querySelectorAll('.group-header').forEach(header => {
         header.addEventListener('click', (e) => {
@@ -1140,6 +1419,33 @@ function attachGroupEventListeners() {
             askAboutFinding(findingData);
         });
     });
+
+    // XML view buttons
+    document.querySelectorAll('.xml-view-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const lineNumber = parseInt(btn.dataset.line, 10);
+            if (lineNumber) {
+                showXmlPosition(lineNumber);
+            }
+        });
+    });
+}
+
+/**
+ * Apply status change to all findings in a thema
+ */
+function applyThemaStatusChange(thema, newStatus) {
+    allFindings.forEach((finding, index) => {
+        if (getThema(finding) === thema) {
+            const findingId = generateFindingId(finding, index);
+            findingStatuses[findingId] = newStatus;
+        }
+    });
+
+    saveStatusesToStorage();
+    renderFindingGroups();
+    updateSummaryCardsFromStatus();
 }
 
 /**
@@ -1165,6 +1471,7 @@ function applyGroupStatusChange(groupKey, newStatus) {
 
     // Update the UI
     renderFindingGroups();
+    updateSummaryCardsFromStatus();
 }
 
 /**
@@ -1322,6 +1629,7 @@ function applyStatusChange(findingId, newStatus) {
 
     updateOpenCount();
     updateProgressBar();
+    updateSummaryCardsFromStatus();
 }
 
 function applyBulkStatusChange(findingIds, newStatus) {
@@ -1592,6 +1900,49 @@ async function sendChatMessage() {
     }
 }
 
+/**
+ * Parse markdown text to HTML
+ */
+function parseMarkdown(text) {
+    if (!text) return '';
+
+    // Escape HTML first to prevent XSS
+    let html = escapeHtml(text);
+
+    // Code blocks (must be before inline code)
+    html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    // Headers (process from h3 to h1 to avoid conflicts)
+    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+
+    // Bold
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+    // Italic
+    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+    // Unordered lists
+    html = html.replace(/^\s*[-*]\s+(.*)$/gim, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+    // Ordered lists
+    html = html.replace(/^\s*\d+\.\s+(.*)$/gim, '<li>$1</li>');
+
+    // Line breaks (but not inside pre/code blocks)
+    html = html.replace(/\n/g, '<br>');
+
+    // Clean up extra breaks around block elements
+    html = html.replace(/<br>\s*<(h[1-3]|pre|ul|ol|li)/g, '<$1');
+    html = html.replace(/<\/(h[1-3]|pre|ul|ol|li)>\s*<br>/g, '</$1>');
+
+    return html;
+}
+
 function addChatMessage(role, content, sources = null) {
     const chatMessages = document.getElementById('chatMessages');
 
@@ -1602,7 +1953,12 @@ function addChatMessage(role, content, sources = null) {
     contentDiv.className = 'message-content';
 
     const textSpan = document.createElement('span');
-    textSpan.textContent = content;
+    // Use innerHTML with parsed markdown for assistant messages
+    if (role === 'assistant') {
+        textSpan.innerHTML = parseMarkdown(content);
+    } else {
+        textSpan.textContent = content;
+    }
     contentDiv.appendChild(textSpan);
 
     if (sources && sources.length > 0) {
@@ -1622,4 +1978,230 @@ function addChatMessage(role, content, sources = null) {
     messageDiv.appendChild(contentDiv);
     chatMessages.appendChild(messageDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// ========================================
+// SESSION HANDLING (Save/Load .sivi files)
+// ========================================
+
+/**
+ * Setup session save/load functionality
+ */
+function setupSessionHandling() {
+    // Session save button
+    if (downloadSessionBtn) {
+        downloadSessionBtn.addEventListener('click', downloadSession);
+    }
+
+    // Session load button and file input
+    if (loadSessionBtn && sessionFileInput) {
+        loadSessionBtn.addEventListener('click', () => sessionFileInput.click());
+        sessionFileInput.addEventListener('change', handleSessionFileSelect);
+    }
+}
+
+/**
+ * Download current session as .sivi file
+ */
+function downloadSession() {
+    if (!validationResult) {
+        showError('Geen validatie resultaten om op te slaan.');
+        return;
+    }
+
+    const session = {
+        version: 1,
+        type: 'sivi-session',
+        timestamp: new Date().toISOString(),
+        fileName: selectedFile?.name || validationResult.metadata?.file_name || 'unknown.xml',
+        validationResult: validationResult,
+        findingStatuses: findingStatuses,
+        xmlContent: originalXmlContent || null
+    };
+
+    const json = JSON.stringify(session, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const filename = `sessie_${session.fileName.replace('.xml', '')}_${getTimestamp()}.sivi`;
+
+    downloadBlob(blob, filename);
+}
+
+/**
+ * Handle session file selection
+ */
+async function handleSessionFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    // Reset input so same file can be selected again
+    event.target.value = '';
+
+    if (!file.name.toLowerCase().endsWith('.sivi')) {
+        showError('Selecteer een .sivi sessie bestand.');
+        return;
+    }
+
+    try {
+        const content = await readFileAsText(file);
+        const session = JSON.parse(content);
+        loadSession(session);
+    } catch (error) {
+        showError('Kon sessie bestand niet laden: ' + error.message);
+    }
+}
+
+/**
+ * Load a session from parsed session data
+ */
+function loadSession(session) {
+    // Validate session format
+    if (!session.type || session.type !== 'sivi-session') {
+        showError('Ongeldig sessie bestand formaat.');
+        return;
+    }
+
+    if (!session.validationResult) {
+        showError('Sessie bevat geen validatie resultaten.');
+        return;
+    }
+
+    // Restore state
+    validationResult = session.validationResult;
+    allFindings = validationResult.findings || [];
+    findingStatuses = session.findingStatuses || {};
+    originalXmlContent = session.xmlContent || null;
+
+    // Create a pseudo file object for display purposes
+    selectedFile = {
+        name: session.fileName || 'Geladen sessie'
+    };
+
+    // Generate file validation ID for status storage
+    fileValidationId = `${session.fileName}-${session.validationResult.timestamp || session.timestamp}`;
+
+    // Reset view state
+    currentCategory = 'all';
+    expandedGroups.clear();
+    collapsedThemas.clear();
+
+    // Display results and switch to results view
+    displayResults();
+    showResultsView();
+
+    // Show success message
+    showSessionLoadedToast(session.fileName, allFindings.length);
+}
+
+/**
+ * Show a toast when session is loaded
+ */
+function showSessionLoadedToast(fileName, findingsCount) {
+    const toast = document.getElementById('errorToast');
+    const text = document.getElementById('errorText');
+    const icon = toast.querySelector('.toast-icon');
+
+    // Temporarily change to success styling
+    if (icon) icon.style.color = 'var(--green-500)';
+    text.textContent = `Sessie "${fileName}" geladen met ${findingsCount} bevindingen`;
+    toast.hidden = false;
+
+    setTimeout(() => {
+        toast.hidden = true;
+        if (icon) icon.style.color = 'var(--red-500)';
+    }, 3000);
+}
+
+// ========================================
+// XML POSITION VIEWER
+// ========================================
+
+/**
+ * Setup XML viewer modal
+ */
+function setupXmlViewer() {
+    const modal = document.getElementById('xmlViewerModal');
+    const closeBtn = document.getElementById('xmlViewerClose');
+
+    if (modal) {
+        // Close on backdrop click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closeXmlViewer();
+            }
+        });
+    }
+
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closeXmlViewer);
+    }
+
+    // Close on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeXmlViewer();
+        }
+    });
+}
+
+/**
+ * Show XML position viewer for a specific line number
+ */
+function showXmlPosition(lineNumber, context = 5) {
+    if (!originalXmlContent) {
+        showError('XML content niet beschikbaar. Laad het originele bestand opnieuw.');
+        return;
+    }
+
+    const modal = document.getElementById('xmlViewerModal');
+    const content = document.getElementById('xmlViewerContent');
+    const lineInfo = document.getElementById('xmlViewerLineInfo');
+
+    if (!modal || !content) return;
+
+    const lines = originalXmlContent.split('\n');
+    const targetLine = parseInt(lineNumber, 10);
+
+    // Calculate range to display
+    const startLine = Math.max(1, targetLine - context);
+    const endLine = Math.min(lines.length, targetLine + context);
+
+    // Build HTML with line numbers and highlighting
+    let html = '';
+    for (let i = startLine; i <= endLine; i++) {
+        const lineContent = escapeHtml(lines[i - 1] || '');
+        const isTarget = (i === targetLine);
+        const lineClass = isTarget ? 'xml-line xml-line-highlight' : 'xml-line';
+
+        html += `<div class="${lineClass}">`;
+        html += `<span class="xml-line-number">${i}</span>`;
+        html += `<span class="xml-line-content">${lineContent}</span>`;
+        html += `</div>`;
+    }
+
+    content.innerHTML = html;
+
+    if (lineInfo) {
+        lineInfo.textContent = `Regel ${targetLine} van ${lines.length}`;
+    }
+
+    // Show modal
+    modal.hidden = false;
+
+    // Scroll to highlighted line after modal is visible
+    requestAnimationFrame(() => {
+        const highlightedLine = content.querySelector('.xml-line-highlight');
+        if (highlightedLine) {
+            highlightedLine.scrollIntoView({ block: 'center' });
+        }
+    });
+}
+
+/**
+ * Close XML viewer modal
+ */
+function closeXmlViewer() {
+    const modal = document.getElementById('xmlViewerModal');
+    if (modal) {
+        modal.hidden = true;
+    }
 }
